@@ -1,9 +1,10 @@
-use std::fs::File;
-use std::io::{self, BufRead};
 use regex::Regex;
 use std::env;
-// use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, BufRead};
+use either::{Left, Right, Either};
 
+// use std::collections::HashMap;
 fn main() {
     // TODO: make these command line arguments
     let start_comment = Regex::new(r"^\s*/\*\*\s*$").unwrap();
@@ -24,29 +25,21 @@ fn main() {
         }
     };
     let reader = io::BufReader::new(file);
-    let mut comment_filter = CommentFilter{
-        in_comment: false,
-        start_comment,
-        end_comment,
-        comment_prefix,
-        line_count: 0
-    };
-    for line_result in reader.lines() {
-        let line = match line_result {
-            Ok(r) => r,
-            Err(e) => {
-                println!("Error reading file: {}", e);
-                std::process::exit(1)
-            }
-        };
-        let filtered = comment_filter.apply(line.as_ref());
-        if let Some(cline) = filtered {
-            println!("{}", cline.line);
+    let str_lines = reader.lines().map(|x| match x {
+        Ok(r) => r,
+        Err(e) => {
+            println!("Error reading file: {}", e);
+            std::process::exit(1)
         }
+    });
+    let comment_filter = Comments::new(str_lines, start_comment, end_comment, comment_prefix);
+    for comment in comment_filter {
+        println!("{}: {}", comment.line, comment.value)
     }
 }
 
-struct CommentFilter {
+struct Comments<T: Iterator<Item = String>> {
+    lines: T,
     in_comment: bool,
     comment_prefix: Regex,
     start_comment: Regex,
@@ -54,150 +47,159 @@ struct CommentFilter {
     line_count: i64,
 }
 
-struct CommentResult<'a> {
-    line: &'a str,
-    line_num: i64,
+impl<T: Iterator<Item = String>> Comments<T> {
+    fn new(
+        lines: T,
+        start_comment: Regex,
+        end_comment: Regex,
+        comment_prefix: Regex,
+    ) -> Comments<T> {
+        return Comments {
+            lines,
+            in_comment: false,
+            start_comment,
+            end_comment,
+            comment_prefix,
+            line_count: 0,
+        };
+    }
+}
+struct CommentResult {
+    value: String,
+    line: i64,
 }
 
-impl CommentFilter {
-    fn apply<'a>(&mut self, line: &'a str) -> Option<CommentResult<'a>> {
-        if !self.in_comment && self.start_comment.is_match(line) {
+impl<T: Iterator<Item = String>> Iterator for Comments<T> {
+    type Item = CommentResult;
+    fn next(&mut self) -> Option<Self::Item> {
+        let value = match self.lines.next() {
+            Some(x) => x,
+            None => return None,
+        };
+
+        if !self.in_comment && self.start_comment.is_match(value.as_str()) {
             self.in_comment = true;
             self.line_count = 0;
-            return None;
-        } else if self.in_comment && self.end_comment.is_match(line) {
+            return self.next();
+        } else if self.in_comment && self.end_comment.is_match(value.as_str()) {
             self.in_comment = false;
-            let result = Some(CommentResult{
-                line: "\n",
-                line_num: self.line_count+1
-            });
             self.line_count = 0;
-            return result;
+            return self.next();
         }
         if self.in_comment {
             self.line_count += 1;
-            let maybe_cap = self.comment_prefix.captures(line);
+            let maybe_cap = self.comment_prefix.captures(value.as_str());
             if let Some(capture) = maybe_cap {
                 if let Some(cap_match) = capture.get(1) {
-                    return Some(CommentResult{
-                        line: cap_match.as_str(),
-                        line_num: self.line_count,
+                    return Some(CommentResult {
+                        value: String::from(cap_match.as_str()),
+                        line: self.line_count,
                     });
                 }
             }
-            return Some(CommentResult{
-                line: line,
-                line_num: self.line_count,
+            return Some(CommentResult {
+                value,
+                line: self.line_count,
             });
         } else {
-            return None
+            return self.next();
         }
     }
 }
 
-struct DocFilter {
+struct DocIterator<T: Iterator<Item = String>> {
+    comments: Comments<T>,
     file_field: Regex,
     order_field: Regex,
-    pending_result: Option<DocResult>,
 }
 
-struct DocResult<'a> {
-    file: &'a str,
+struct DocResult {
+    file: String,
     order: i64,
     body: String,
-    line_count: i64,
 }
 
-impl DocFilter {
-    fn apply<'a>(&mut self, comment: &'a CommentResult) -> Option<DocResult<'a>> {
-        let old_result = self.pending_result;
-        if comment.line_num == 1 {
-            if let Some(cap) = self.file_field.captures(comment.line) {
-                if let Some(cmatch) = cap.get(1) {
-                    self.pending_result = Some(DocResult {
-                        file: cmatch.as_str(),
-                        order: 0,
-                        body: String::new(),
-                        line_count: comment.line_num,
-                    });
-                }
-            }
-            self.pending_result = None;
-        }
-        if comment.line_num == 2 {
-            if let Some(cap) = self.order_field.captures(comment.line) {
-                if let Some(cmatch) = cap.get(1) {
-                    let order = match cmatch.as_str().parse::<i64>() {
-                        Ok(order) => order,
-                        Err(_) => {
-                            println!("Non-numeric order ({}), ignoring.", comment.line);
-                            0
-                        }
-                    }
-                    let old_result = self.pending_result.unwrap();
-                    self.pending_result = Some(DocResult {
-                        file: old_result.file,
-                        order: old_result.order,
-                        body: old_result.body,
-                        line_count: comment.line_num,
-                    });
-                }
-            }
-            self.pending_result = None;
-        }
-
-        // TODO: rather than returning an Option filters should
-        // return a `Filtered` value that can be Some, None or Final
-        if let Some(x) = old_result {
-            if let Some(y) = self.pending_result {
-                return self.pending_result;
-            }
-        }
-        return None
+fn get_capture(x: &String, re: &Regex) -> Option<String> {
+    return match re.captures(x) {
+        Some(cap) => match cap.get(1) {
+            Some(cmatch) => Some(String::from(cmatch.as_str())),
+            None => None,
+        },
+        None => None,
     }
 }
 
-// struct DocResults {
+impl<T: Iterator<Item = String>> DocIterator<T> {
+    fn new(comments: Comments<T>, file_field: Regex, order_field: Regex) -> DocIterator<T> {
+        return DocIterator{
+            comments,
+            file_field,
+            order_field,
+        };
+    }
+    fn read_file_field(&mut self) -> Option<String> {
+        // read @file (maybe turn into a function)
+        let mut comment = match self.comments.next() {
+            Some(c) => c,
+            None => return None
+        };
+        let mut capture  = get_capture(&comment.value, &self.file_field);
+        while comment.line != 1 || capture.is_none() {
+            comment = match self.comments.next() {
+                Some(c) => c,
+                None => return None
+            };
+            capture = get_capture(&comment.value, &self.file_field);
+        }
+        return capture;
+    }
 
-// }
+    fn read_order_field(&mut self) -> Either<i64, String> {
+        let comment = match self.comments.next() {
+            Some(x) => x,
+            None => return Left(0),
+        };
+        match get_capture(&comment.value, &self.order_field) {
+            Some(num_str) => match num_str.parse() {
+                Ok(order) => return Left(order),
+                Err(_) => {
+                    println!(
+                        "Non-numeric `@order` value ({}), ignoring.",
+                        comment.value,
+                    );
+                    return Left(0)
+                }
+            },
+            None => {
+                return Right(comment.value)
+            }
+        };
+    }
+}
 
-// let file_field = r".*@file\s+(?<file>[^@]+)"
-// let order_field = r".*@order\s+(?<order>[^@]+)"
+impl<T: Iterator<Item = String>> Iterator for DocIterator<T> {
+    type Item = DocResult;
+    fn next(&mut self) -> Option<DocResult> {
+        let mut body = String::new();
 
-// fn process_file(file: File, doc: HashMap<String, DocResults>, start_comment: Regex, end_comment: Regex) {
-//     let mut in_comment = false;
-//     let mut in_docs = false;
-//     let mut new_docs = false;
-//     let lines = io::BufReader::new(file).lines();
-//     let mut Option<&str> cur_file = None;
-//     let mut number cur_order = 0;
-//     while let Some(line) = lines.next() {
-//         if (!in_comment && start_comment.is_match(line)) {
-//             in_comment = true;
-//             if let Some(line) = lines.next() {
-//                 if let Some(captured) = file_field.captures(line) {
-//                     cur_file = captured["file"];
-//                     in_docs = true;
-//                     new_docs = true;
-//                 }
-//             }
-//         } else {
-//             in_comment = false;
-//             in_docs = false;
-//             new_docs = false;
-//         }
-//         if (new_docs) {
-//             if let Some(line) = lines.next() {
-//                 if let Some(captured) = file_field.captures(line) {
-//                     let cur_order_str = captured["order"]
-//                     cur_order = cur_order_str.parse()?;
-//                 } else {
-//                     update_docs(doc, cur_file)
-//                 }
-//             }
-//         }
-//         new_docs = false;
-//     }
+        let file = match self.read_file_field() {
+            Some(f) => f,
+            None => return None,
+        };
 
-//     return doc
-// }
+        let order_or_first_line = self.read_order_field();
+        let order = match order_or_first_line {
+            Left(x) => x,
+            Right(line) => {
+                body.push_str(&line);
+                0
+            }
+        };
+
+        while let Some(comment) = self.comments.next() {
+            body.push_str(&comment.value);
+        }
+
+        return Some(DocResult { file, order, body });
+    }
+}
