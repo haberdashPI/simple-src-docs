@@ -1,15 +1,20 @@
+use either::{Either, Left, Right};
 use regex::Regex;
+use core::fmt;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead};
-use either::{Left, Right, Either};
 
 // use std::collections::HashMap;
 fn main() {
+    let file_field = Regex::new(r"@file\s(.*)").unwrap();
+    let order_field = Regex::new(r"@order\s(.*)").unwrap();
+
     // TODO: make these command line arguments
     let start_comment = Regex::new(r"^\s*/\*\*\s*$").unwrap();
     let end_comment = Regex::new(r"^\s*\*/\s*$").unwrap();
     let comment_prefix = Regex::new(r"^\s*\*+\s*(.*)$").unwrap();
+
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         println!("Required filename argument missing.");
@@ -32,11 +37,14 @@ fn main() {
             std::process::exit(1)
         }
     });
-    let comment_filter = Comments::new(str_lines, start_comment, end_comment, comment_prefix);
-    for comment in comment_filter {
-        println!("{}: {}", comment.line, comment.value)
+    let comments = Comments::new(str_lines, start_comment, end_comment, comment_prefix);
+    let docs = DocIterator::new(comments, file_field, order_field);
+    for doc in docs {
+        println!("{}", doc);
     }
 }
+
+// Comments ////////////////////////////////////////////////////////////////////////////////
 
 struct Comments<T: Iterator<Item = String>> {
     lines: T,
@@ -107,10 +115,18 @@ impl<T: Iterator<Item = String>> Iterator for Comments<T> {
     }
 }
 
+// Docs ////////////////////////////////////////////////////////////////////////////////////
+
 struct DocIterator<T: Iterator<Item = String>> {
     comments: Comments<T>,
     file_field: Regex,
     order_field: Regex,
+}
+
+impl fmt::Display for DocResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        return write!(f, "{}[{}]:\n{}\n", self.file, self.order, self.body);
+    }
 }
 
 struct DocResult {
@@ -126,12 +142,12 @@ fn get_capture(x: &String, re: &Regex) -> Option<String> {
             None => None,
         },
         None => None,
-    }
+    };
 }
 
 impl<T: Iterator<Item = String>> DocIterator<T> {
     fn new(comments: Comments<T>, file_field: Regex, order_field: Regex) -> DocIterator<T> {
-        return DocIterator{
+        return DocIterator {
             comments,
             file_field,
             order_field,
@@ -141,13 +157,13 @@ impl<T: Iterator<Item = String>> DocIterator<T> {
         // read @file (maybe turn into a function)
         let mut comment = match self.comments.next() {
             Some(c) => c,
-            None => return None
+            None => return None,
         };
-        let mut capture  = get_capture(&comment.value, &self.file_field);
+        let mut capture = get_capture(&comment.value, &self.file_field);
         while comment.line != 1 || capture.is_none() {
             comment = match self.comments.next() {
                 Some(c) => c,
-                None => return None
+                None => return None,
             };
             capture = get_capture(&comment.value, &self.file_field);
         }
@@ -163,16 +179,11 @@ impl<T: Iterator<Item = String>> DocIterator<T> {
             Some(num_str) => match num_str.parse() {
                 Ok(order) => return Left(order),
                 Err(_) => {
-                    println!(
-                        "Non-numeric `@order` value ({}), ignoring.",
-                        comment.value,
-                    );
-                    return Left(0)
+                    println!("Non-numeric `@order` value ({}), ignoring.", comment.value,);
+                    return Left(0);
                 }
             },
-            None => {
-                return Right(comment.value)
-            }
+            None => return Right(comment.value),
         };
     }
 }
@@ -192,12 +203,14 @@ impl<T: Iterator<Item = String>> Iterator for DocIterator<T> {
             Left(x) => x,
             Right(line) => {
                 body.push_str(&line);
+                body.push('\n');
                 0
             }
         };
 
         while let Some(comment) = self.comments.next() {
             body.push_str(&comment.value);
+            body.push('\n');
         }
 
         return Some(DocResult { file, order, body });
