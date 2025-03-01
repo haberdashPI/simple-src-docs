@@ -6,18 +6,18 @@ simple-src-docs is an extremely bare bones tool to facilitate generating documen
 ❯ simple-src-docs --help
 Extracts doc strings into markdown files
 
-Takes all passed files in lexicographic order and searches for comments that start with
-`--start-comment` regex, and ending with `--end-comemnt` regex. Looks for `@file [file]`
-on the line following `--start-comment` and if present the contents of the comment are
-appended to the specified file path. The file and its directories are created at the
-given `--dest`. Optionally, after the line with `@file` you can provide `@order [num]` to
-influence the ordering of the comment content. Content is sorted from the lowest to the
-highest `order`, breaking ties by pre-sorted ordering.
+Walks through all files in `[SOURCE]` and searches for comments that start with `--start-
+comment` regex, and ending with `--end-comemnt` regex. Looks for `@file [file]` on the line
+following `--start-comment` and if present the contents of the comment are appended to the
+specified file path. The file and its directories are created at the given `--dest`.
+Optionally, after the line with `@file` you can provide `@order [num]` to influence the
+ordering of the comment content. Content is sorted from the lowest to the highest `order`,
+breaking ties by pre-sorted ordering.
 
-Usage: simple-src-docs [OPTIONS] [FILES]...
+Usage: simple-src-docs [OPTIONS] <SOURCE>
 
 Arguments:
-  [FILES]...
+  <SOURCE>
 
 
 Options:

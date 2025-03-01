@@ -11,31 +11,32 @@ use walkdir::WalkDir;
 
 /// Extracts doc strings into markdown files
 ///
-/// Takes all passed files in lexicographic order and searches for comments that start with
-/// `--start-comment` regex, and ending with `--end-comemnt` regex. Looks for `@file [file]`
-/// on the line following `--start-comment` and if present the contents of the comment are
+/// Walks through all files in `<SOURCE>` and searches for comments that start with
+/// `<START_COMMENT>` regex, and ending with `<END_COMEMNT>` regex. Looks for `@file [file]`
+/// on the line following `<START_COMMENT>` and if present the contents of the comment are
 /// appended to the specified file path. The file and its directories are created at the
-/// given `--dest`. Optionally, after the line with `@file` you can provide `@order [num]`
-/// to influence the ordering of the comment content. Content is sorted from the lowest to
-/// the highest `order`, breaking ties by pre-sorted ordering.
+/// given `<DEST>`. Optionally, after the line with `@file` you can provide `@order [num]` to
+/// influence the ordering of the comment content. Content is sorted from the lowest to the
+/// highest `order`, breaking ties by pre-sorted ordering.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about)]
 struct Args {
-    // regex for the starting comment delimiter
+    /// regex for the starting comment delimiter
     #[arg(short, long, default_value = r"^\s*/\*\*\s*$")]
     start_comment: String,
-    // regex for the ending comment delimiter
+    /// regex for the ending comment delimiter
     #[arg(short, long, default_value = r"^\s*\*/\s*$")]
     end_comment: String,
-    // the prefix to be removed from each line between the start and end comment delimiter
+    /// the prefix to be removed from each comment line between the start and end comment
+    /// delimiter
     #[arg(short, long, default_value = r"^\s*\*+\s*(.*)$")]
     comment_prefix: String,
 
-    // root directory where markdown files are generated
+    /// root directory where markdown files are generated
     #[arg(short, long, default_value = ".")]
     dest: PathBuf,
 
-    // the source directory where comment will be extracted from
+    /// the source directory where comments will be extracted from
     source: PathBuf,
 }
 
