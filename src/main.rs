@@ -7,6 +7,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::collections::HashMap;
 use clap::Parser;
+use walkdir::WalkDir;
 
 /// Extracts doc strings into markdown files
 ///
@@ -34,8 +35,8 @@ struct Args {
     #[arg(short, long, default_value = ".")]
     dest: PathBuf,
 
-    // the files to extract comments from
-    files: Vec<String>,
+    // the source directory where comment will be extracted from
+    source: PathBuf,
 }
 
 fn to_regex(x: &str) -> Regex {
@@ -62,7 +63,17 @@ fn main() {
     let comment_prefix = to_regex(&args.comment_prefix);
 
     let mut docmap = HashMap::new();
-    for file in args.files {
+    for entry in WalkDir::new(args.source) {
+        let file_entry = match entry {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error walking paths: {}", e);
+                continue;
+            }
+        };
+        let file = file_entry.path();
+        if !file.is_file() { continue; }
+
         let io = match File::open(file) {
             Ok(x) => x,
             Err(e) => {
@@ -86,8 +97,9 @@ fn main() {
         }
     }
 
+    println!("Writing doc files:");
     for (file, items) in &docmap {
-        println!("Writing to doc file: {}", file);
+        println!(" - {}", file);
         let path = destination.join(file);
         let dir = path.parent().unwrap();
 
