@@ -1,4 +1,5 @@
 use either::{Either, Left, Right};
+use std::cmp::Ordering;
 use regex::Regex;
 use core::fmt;
 use std::fs;
@@ -121,7 +122,7 @@ fn main() {
         };
 
         let mut sorted = items.clone();
-        sorted.sort_by_key(|x| x.0);
+        sorted.sort_by(|a,b| a.partial_cmp(b).unwrap_or(Ordering::Less));
         for (_, body) in sorted {
             match writeln!(io, "{}", body) {
                 Err(e) => {
@@ -229,7 +230,7 @@ impl fmt::Display for DocResult {
 
 struct DocResult {
     file: String,
-    order: i64,
+    order: f64,
     body: String,
 }
 
@@ -268,17 +269,17 @@ impl<T: Iterator<Item = String>> DocIterator<T> {
         return capture;
     }
 
-    fn read_order_field(&mut self) -> Either<i64, String> {
+    fn read_order_field(&mut self) -> Either<f64, String> {
         let comment = match self.comments.next() {
             Some(x) => x,
-            None => return Left(0),
+            None => return Left(0.0),
         };
         match get_capture(&comment.value, &self.order_field) {
             Some(num_str) => match num_str.parse() {
                 Ok(order) => return Left(order),
                 Err(_) => {
                     println!("Non-numeric `@order` value `{}`, ignoring.", num_str);
-                    return Left(0);
+                    return Left(0.0);
                 }
             },
             None => return Right(comment.value),
@@ -302,7 +303,7 @@ impl<T: Iterator<Item = String>> Iterator for DocIterator<T> {
             Right(line) => {
                 body.push_str(&line);
                 body.push('\n');
-                0
+                0.0
             }
         };
 
