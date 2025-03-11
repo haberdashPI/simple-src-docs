@@ -1,6 +1,6 @@
 # `simple-src-docs`
 
-simple-src-docs is an extremely bare bones tool to facilitate generating documentation from your source files.
+simple-src-docs is tool to facilitate generating documentation from your source files
 
 ```
 Extracts doc strings into markdown files
@@ -34,7 +34,7 @@ Options:
           the prefix to be removed from each comment line between the start and end comment delimiter; the
           first capture group should denote the prefix, and the second the text to read
 
-          [default: ^\s*\*+\s*(.*)$]
+          [default: ^\s*\*+\s?(.*)$]
 
   -d, --dest <DEST>
           root directory where markdown files are generated
@@ -55,16 +55,23 @@ Options:
           Print version
 ```
 
-The config file is a TOML file with the following sections:
+The config file is a TOML file that can be used to define tempplates that will transform
+documentation blocks based on tags (`@` prefixed identifiers followed by a line of text).
+It has the following specification:
 
-- `header`: must contain a `version` string that is [semver](https://semver.org/) compatible with 0.1
-- `doc`: Generates additional docs. Has three fields:
-  - `file`: the file to render docs to
-  - `order`: (optional), as per the `@order` field in comments, this
-    determines what order the body will be inserted into the file
-  - `body`: The text to insert into `file`
-- `template`: Transforms docs using the given set of tags into the `output` docs.
-  Can use additional arbitrary `@` prefixed tags listed in a doc
+- `header`: must contain a `version` string that is [semver](https://semver.org/) compatible with 0.2
+- `template`: Object used to transform docs with a given set of tags. There are two fields:
+   - `foreach`: an array of templates that are applied to each document block.
+     All fields can be specified as [mustache template](https://mustache.github.io/) strings. Each mustache field in the template corresponds to one of the tags from the original document block.
+        - `tags`: an array of strings. This template will apply to any document block
+          where all the specified tags are present.
+        - `file`: the file to store output in
+        - `order`: the order of this template output relative to other document blocks
+        - `output`: the resulting text output to write to the file
+   - `all`: an array of templates that are applied across all document blocks.
+          All fields can be specified as [mustache template](https://mustache.github.io/) strings. There is a single mustache variable named `items`, an array whose
+          items correspond to the tags in the original document block.
+
   - `tags`: an array of strings; for the template to be applied these tags must
     be present
   - `output`: an array of objects with the following fields. All values
@@ -80,44 +87,111 @@ Example config file
 
 ```toml
 [header]
-version = 0.1
+version = "0.1.0"
 
-[[doc]]
-file = ".vitpress/commands.mjs"
-order = -1000
-body = """
-export default commandLines = [
+[[template.all]]
+tags = ["bindingField"]
+file = ".vitepress/bindings.mjs"
+output = """
+export const bindingItems = [
+    {{#items}}
+    { text: '{{bindingField}}', link: '/bindings/{{bindingField}}' },
+    {{/items}}
+]
 """
 
-[[doc]]
+[[template.all]]
+tags = ["bindingField", "description"]
+file = "bindings/index.md"
+order = 5
+output = """
+{{#items}}
+- [`{{bindingField}}`](/bindings/{{bindingField}}.md): {{description}}
+{{/items}}
+"""
+
+[[template.all]]
+tags = ["userCommand"]
 file = ".vitepress/commands.mjs"
-order = 10000
-body = """
-];
+output = """
+export const userCommandItems = [
+    {{#items}}
+    { text: '{{userCommand}}', link: '/commands/index#user-commands' },
+    {{/items}}
+]
 """
 
-[[template]]
+[[template.all]]
 tags = ["command"]
-
-[[template.output]]
 file = ".vitepress/commands.mjs"
-order = "{{order}}"
-body = """
-{ text: '{{command}}', link: '/commands/{{command}}' },
+output = """
+export const commandItems = [
+    {{#items}}
+    { text: '{{command}}', link: '/commands/{{command}}.md' },
+    {{/items}}
+]
 """
 
-[[template.output]]
+[[template.all]]
+tags = ["userCommand", "name"]
 file = "commands/index.md"
-order = "{{order}}"
-body = """
- - [`master-key.{{command}}'](/commands/{{command}})
+output = """
+## User Commands
+
+User commands take no arguments and generally interact with the user-interface of VSCode.
+
+{{#items}}
+- `Master Key: {{name}}` (`master-key.{{userCommand}}`) — {{{__body__}}}
+{{/items}}
 """
 
-[[template.output]]
+[[template.all]]
+tags = ["command"]
+file = "commands/index.md"
+output = """
+## Keybinding Commands
+
+Keybinding commands usually have at least one argument and are expected to primarily be
+used when defining keybindings in a [master keybinding TOML file](/bindings).
+
+{{#items}}
+{{#section}}
+
+### {{.}}
+
+{{/section}}
+- [`master-key.{{command}}`](/commands/{{command}}.md)
+{{/items}}
+"""
+
+[[template.foreach]]
+tags = ["command"]
 file = "commands/{{command}}.md"
-body = """
+output = """
 # `master-key.{{command}}`
 
-{{__body__}}
+{{{__body__}}}
 """
+
+[[template.foreach]]
+tags = ["bindingField", "description"]
+file = "bindings/{{bindingField}}.md"
+output = """
+
+# Binding Field `{{bindingField}}`
+
+{{{__body__}}}
+"""
+
+[[template.foreach]]
+tags = ["forBindingField"]
+file = "bindings/{{forBindingField}}.md"
+output = "{{{__body__}}}"
 ```
+
+## Roadmap
+
+- support language specific config
+- support multiple source directories
+- implement a "watch" mode version of the service (or use npm extension to do this for us
+  in master key)

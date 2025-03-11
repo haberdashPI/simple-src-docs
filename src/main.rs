@@ -40,7 +40,7 @@ struct Args {
     /// the prefix to be removed from each comment line between the start and end comment
     /// delimiter; the first capture group should denote the prefix, and the second the text
     /// to read
-    #[arg(short, long, default_value = r"^\s*\*+\s*(.*)$")]
+    #[arg(short, long, default_value = r"^\s*\*+\s?(.*)$")]
     comment_prefix: String,
 
     /// root directory where markdown files are generated
@@ -120,8 +120,6 @@ impl From<walkdir::Error> for SrcDocError {
 }
 
 fn run() -> Result<(), SrcDocError> {
-    let file_field = Regex::new(r"@file\s(.*)").unwrap();
-    let order_field = Regex::new(r"@order\s(.*)").unwrap();
     let args = Args::parse();
     let destination = args.dest;
     if !destination.exists() {
@@ -146,7 +144,7 @@ fn run() -> Result<(), SrcDocError> {
         }
     };
 
-    let mut docmap = HashMap::new();
+    let mut all_docs: Vec<DocData> = Vec::new();
     for entry in WalkDir::new(args.source) {
         let file_entry = entry?;
         let file = file_entry.path();
@@ -162,16 +160,11 @@ fn run() -> Result<(), SrcDocError> {
             end_comment.clone(),
             comment_prefix.clone(),
         );
-        let docs = DocIterator::new(comments, file_field.clone(), order_field.clone());
-        for doc in docs {
-            config.apply(doc, &mut docmap)?;
-        }
+        let mut docs: Vec<DocData> = DocIterator::new(comments).collect();
+        all_docs.append(&mut docs);
     }
-
-    for doc in config.doc.unwrap_or_default() {
-        let items = docmap.entry(doc.file).or_insert(Vec::new());
-        items.push((doc.order, doc.body));
-    }
+    all_docs.sort_by(|a, b| a.order.partial_cmp(&b.order).unwrap_or(Ordering::Less));
+    let mut docmap = config.apply(&all_docs.iter().map(|x| x).collect())?;
 
     if args.verbose { println!("Writing doc files:"); }
     for (file, items) in docmap.iter_mut() {
@@ -198,37 +191,40 @@ fn run() -> Result<(), SrcDocError> {
 struct SrcDocConfig {
     header: ConfigHeader,
     #[serde(default)]
-    template: Option<Vec<DocTemplate>>,
+    template: Option<ConfigTemplates>,
+}
+
+#[derive(Deserialize)]
+struct ConfigTemplates {
     #[serde(default)]
-    doc: Option<Vec<DocResult>>,
+    foreach: Option<Vec<DocEachTemplate>>,
+    #[serde(default)]
+    all: Option<Vec<DocAllTemplate>>,
 }
 
 impl SrcDocConfig {
     fn new() -> SrcDocConfig {
         return SrcDocConfig {
             header: ConfigHeader {
-                version: Version::parse("0.1").unwrap(),
+                version: Version::parse("0.2").unwrap(),
             },
             template: None,
-            doc: None,
         };
     }
 
     fn from<T: AsRef<Path>>(path: T) -> Result<SrcDocConfig, SrcDocError> {
         let str = fs::read_to_string(&path)?;
-        let mut result = toml::from_str::<SrcDocConfig>(&str)?;
-        result.template.iter_mut().for_each(|x|
-            x.sort_by(|a, b| a.order.partial_cmp(&b.order).unwrap_or(Ordering::Less)));
+        let result = toml::from_str::<SrcDocConfig>(&str)?;
         return Ok(result);
     }
 }
 
 fn valid_version(v: &Version) -> Result<(), ValidationError> {
-    if  VersionReq::parse("0.1").unwrap().matches(v) {
+    if  VersionReq::parse("0.2").unwrap().matches(v) {
         return Ok(());
     } else {
         return Err(ValidationError::new(
-            "File version incompatible with semver 0.1",
+            "File version incompatible with semver 0.2",
         ));
     }
 }
@@ -248,19 +244,21 @@ fn left_zero() -> Either<f64, String> {
 }
 
 #[derive(Deserialize)]
-struct DocTemplate {
+struct DocEachTemplate {
     tags: Vec<String>,
-    #[serde(default = "zero")]
-    order: f64,
-    output: Vec<DocTemplateElement>,
-}
-
-#[derive(Deserialize)]
-struct DocTemplateElement {
     file: String,
     #[serde(with = "either::serde_untagged", default = "left_zero")]
     order: Either<f64, String>,
-    body: String,
+    output: String,
+}
+
+#[derive(Deserialize)]
+struct DocAllTemplate{
+    file: String,
+    tags: Vec<String>,
+    #[serde(default = "zero")]
+    order: f64,
+    output: String,
 }
 
 enum TemplateError {
@@ -289,72 +287,95 @@ impl From<ParseFloatError> for TemplateError {
     }
 }
 
-impl DocTemplateElement {
-    fn apply(&self, doc: &DocData) -> Result<DocResult, TemplateError> {
+fn parse_order(order_str: &str) -> f64 {
+    return match order_str.parse() {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("Error while evaluating @order {order_str}: {e}");
+            0.0
+        }
+    }
+}
+
+impl DocEachTemplate {
+    fn apply<'a>(&self, docs: &Vec<&'a DocData>, result: &mut HashMap<String, Vec<(f64, String)>>) -> Result<(), TemplateError> {
+        for doc in docs {
+            if !self.tags.iter().all(|tag| doc.tags.contains_key(tag)) { continue; }
+
+            let mut builder = MapBuilder::new();
+            for (key, val) in &doc.tags {
+                builder = builder.insert_str(key, val);
+            }
+            builder = builder.insert_str("__body__", &doc.body);
+            let data = builder.build();
+
+            let file: String = mustache::compile_str(&self.file)?.render_data_to_string(&data)?;
+            let order: f64 = match &self.order {
+                Left(n) => *n,
+                Right(str) => {
+                    parse_order(&mustache::compile_str(&str)?.render_data_to_string(&data)?)
+                }
+            };
+            let body: String = mustache::compile_str(&self.output)?.render_data_to_string(&data)?;
+            let items = result.entry(file).or_insert(Vec::new());
+            items.push((order, body));
+        }
+        return Ok(());
+    }
+}
+
+impl DocAllTemplate {
+    fn apply<'a>(&self, docs: &Vec<&'a DocData>, result: &mut HashMap<String, Vec<(f64, String)>>) -> Result<(), TemplateError> {
         let mut builder = MapBuilder::new();
-        for (key, val) in &doc.tags {
-            builder = builder.insert_str(key, val);
-        }
-        builder = builder.insert_str("__body__", &doc.body);
+        builder = builder.insert_vec("items", |mut builder| {
+            for s in docs {
+                if !self.tags.iter().all(|tag| s.tags.contains_key(tag)) { continue; }
+                builder = builder.push_map(|mut map_builder| {
+                    for (k, v) in &s.tags {
+                        map_builder = map_builder.insert_str(k, v);
+                    }
+                    map_builder = map_builder.insert_str("__body__", &s.body);
+                    return map_builder;
+                });
+            }
+            return builder;
+        });
+
         let data = builder.build();
-
-        let file: String = mustache::compile_str(&self.file)?.render_data_to_string(&data)?;
-        let order: f64 = match &self.order {
-            Left(n) => *n,
-            Right(str) => {
-                let n_str: String = mustache::compile_str(&str)?.render_data_to_string(&data)?;
-                match n_str.parse() {
-                    Ok(x) => x,
-                    Err(e) => {
-                        eprintln!("Error while evaluating @order {}: {}", &str, e);
-                        println!("{:?}", data);
-                        0.0
-                    }
-                }
-            }
-        };
-        let body: String = mustache::compile_str(&self.body)?.render_data_to_string(&data)?;
-        return Ok(DocResult { file, order, body });
+        let body: String = mustache::compile_str(&self.output)?.render_data_to_string(&data)?;
+        let items = result.entry(self.file.clone()).or_default();
+        items.push((self.order, body));
+        return Ok(())
     }
 }
 
-impl DocTemplate {
-    fn apply(&self, doc: &DocData) -> Result<Vec<DocResult>, TemplateError> {
-        if self.tags.iter().all(|tag| doc.tags.contains_key(tag)) {
-            return self.output.iter().map(|t| t.apply(&doc)).collect();
-        } else {
-            return Ok(Vec::new());
-        }
-    }
-}
-
+// TODO: this gets applies per file, and we need to apply it to all files
 impl SrcDocConfig {
-    fn apply(
-        &self,
-        data: DocData,
-        results: &mut HashMap<String, Vec<(f64, String)>>,
-    ) -> Result<(), TemplateError> {
+    fn apply<'a>(&self, data: &Vec<&'a DocData>) -> Result<HashMap<String, Vec<(f64, String)>>, TemplateError> {
+        let mut results = HashMap::new();
+        if let Some(templates) = &self.template {
+            if let Some(each_templates) = &templates.foreach {
+                for each_template in each_templates {
+                    each_template.apply(data, &mut results)?;
+                }
+            }
 
-        if let Some(x) = &self.template {
-            for template in x {
-                let applied = template.apply(&data)?;
-                if !applied.is_empty() {
-                    for r in applied {
-                        let items = results.entry(r.file).or_insert(Vec::new());
-                        items.push((r.order, r.body));
-                    }
-                    return Ok(());
+            if let Some(all_templates) = &templates.all {
+                for all_template in all_templates {
+                    all_template.apply(data, &mut results)?;
+                }
+            }
+
+            for doc in data {
+                if let Some(file) = doc.tags.get("file") {
+                    let order = doc.order;
+                    let items = results.entry(file.clone()).or_default();
+                    items.push((order, doc.body.clone()));
                 }
             }
         }
-        return match DocResult::new(data) {
-            None => Ok(()),
-            Some(r) => {
-                let items = results.entry(r.file).or_insert(Vec::new());
-                items.push((r.order, r.body));
-                Ok(())
-            }
-        }
+
+        return Ok(results);
     }
 }
 
@@ -396,10 +417,7 @@ struct CommentResult {
 impl<T: Iterator<Item = String>> Iterator for Comments<T> {
     type Item = CommentResult;
     fn next(&mut self) -> Option<Self::Item> {
-        let value = match self.lines.next() {
-            Some(x) => x,
-            None => return None,
-        };
+        let value = self.lines.next()?;
 
         if !self.in_comment && self.start_comment.is_match(value.as_str()) {
             self.in_comment = true;
@@ -436,43 +454,41 @@ impl<T: Iterator<Item = String>> Iterator for Comments<T> {
 
 struct DocIterator<T: Iterator<Item = String>> {
     comments: Comments<T>,
-    file_field: Regex,
-    order_field: Regex,
 }
 
 #[derive(Debug)]
 struct DocData {
     tags: HashMap<String, String>,
+    order: f64,
     body: String,
 }
 
 impl<T: Iterator<Item = String>> DocIterator<T> {
-    fn new(comments: Comments<T>, file_field: Regex, order_field: Regex) -> DocIterator<T> {
-        return DocIterator {
-            comments,
-            file_field,
-            order_field,
-        };
+    fn new(comments: Comments<T>) -> DocIterator<T> {
+        return DocIterator { comments };
     }
 }
 
 impl<T: Iterator<Item = String>> Iterator for DocIterator<T> {
     type Item = DocData;
     fn next(&mut self) -> Option<DocData> {
-        let tagr: Regex = Regex::new(r".*@(?<tag>\S+)\s+(?<value>.*)").unwrap();
+        let tag_r: Regex = Regex::new(r".*@(?<tag>\S+)\s+(?<value>.*)").unwrap();
         let mut body = String::new();
         let mut tags = HashMap::new();
         let mut available_data = false;
+        let mut order = 0.0;
 
         for comment in &mut self.comments {
             if comment.last {
                 break;
             }
 
-            if let Some(m) = tagr.captures(&comment.value) {
+            if let Some(m) = tag_r.captures(&comment.value) {
                 if &m["tag"] == "__body__" {
                     eprintln!("The tag `__body__` is reserved.");
                     std::process::exit(1);
+                } else if &m["tag"] == "order" {
+                    order = parse_order(&m["value"]);
                 }
                 tags.insert(String::from(&m["tag"]), String::from(&m["value"]));
             } else {
@@ -483,43 +499,9 @@ impl<T: Iterator<Item = String>> Iterator for DocIterator<T> {
         }
 
         if available_data {
-            if !tags.contains_key("order") {
-                tags.insert("order".to_string(), "0.0".to_string());
-            }
-            return Some(DocData { tags, body });
+            return Some(DocData { tags, order, body });
         } else {
             return None;
         }
-    }
-}
-
-// Processed Docs //////////////////////////////////////////////////////////////////////////
-
-#[derive(Debug, Deserialize, Clone)]
-struct DocResult {
-    file: String,
-    #[serde(default = "zero")]
-    order: f64,
-    body: String,
-}
-
-impl DocResult {
-    fn new(x: DocData) -> Option<DocResult> {
-        let file = match x.tags.get("file") {
-            None => return None,
-            Some(file) => String::from(file),
-        };
-        let order = match x.tags.get("order") {
-            None => 0.0,
-            Some(o) => match o.parse() {
-                Err(_) => 0.0,
-                Ok(o_value) => o_value,
-            },
-        };
-        return Some(DocResult {
-            file,
-            order,
-            body: x.body,
-        });
     }
 }
