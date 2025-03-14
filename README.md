@@ -55,9 +55,7 @@ Options:
           Print version
 ```
 
-The config file is a TOML file that can be used to define tempplates that will transform
-documentation blocks based on tags (`@` prefixed identifiers followed by a line of text).
-It has the following specification:
+The config file is a TOML file that can be used to configure how comments are identified and define tempplates that will transform documentation blocks based on tags (`@` prefixed identifiers followed by a line of text). It has the following specification:
 
 - `header`: must contain a `version` string that is [semver](https://semver.org/) compatible with 0.2
 - `template`: Object used to transform docs with a given set of tags. There are two fields:
@@ -81,13 +79,24 @@ It has the following specification:
         - `file`: the file to store output in
         - `order`: the ordering of the doc in the file
         - `body`: the content to write to the file
+- `comment`: defines how comments are found in a given type of file
+  - `extension`: a [glob](https://github.com/olson-sean-k/wax/blob/master/README.md#patterns) expression describing what files this comment type describe, which will be prefixed with `(?i)`, making it case insensitive.
+  - `start`: the starting regular expression for a multi-line comment
+  - `each_line`: The prefix that must be present (for single-line comments) and that can be present for multi-line comments. The first capture group must contain the contents of the comment
+  - `end`: The the ending regular expression for a multi-line-comment
 
 
 Example config file
 
 ```toml
 [header]
-version = "0.1.0"
+version = "0.2.0"
+
+[[comment]]
+extension = "*.md"
+start = '<!--\s*START_DOCS\s*-->'
+each_line = '<!--(.*)-->' # some lines will, and some lines wont' have this
+stop = '<!--\s*STOP_DOCS\s*-->'
 
 [[template.all]]
 tags = ["bindingField"]
@@ -191,7 +200,7 @@ output = "{{{__body__}}}"
 
 ## Roadmap
 
-- support language specific config
-- support multiple source directories
+- support multi-line tag values
+- support filtering via the config file / command line args
 - implement a "watch" mode version of the service (or use npm extension to do this for us
   in master key)
