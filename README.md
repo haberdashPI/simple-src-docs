@@ -59,38 +59,30 @@ The config file is a TOML file that can be used to configure how comments are id
 
 - `header`: must contain a `version` string that is [semver](https://semver.org/) compatible with 0.2
 - `template`: Object used to transform docs with a given set of tags. There are two fields:
-   - `foreach`: an array of templates that are applied to each document block.
-     All fields can be specified as [mustache template](https://mustache.github.io/) strings. Each mustache field in the template corresponds to one of the tags from the original document block.
-        - `tags`: an array of strings. This template will apply to any document block
-          where all the specified tags are present.
+   - `foreach`: an array of templates that are applied to each document block. All fields can be specified as [mustache template](https://mustache.github.io/) strings. Each mustache field in the template corresponds to one of the tags from the original document block. In addition the field `__body__` can be used at include
+     the remaining text from a comment block.
+        - `tags`: an array of strings. This template will apply to any document block where all the specified tags are present.
         - `file`: the file to store output in
         - `order`: the order of this template output relative to other document blocks
         - `output`: the resulting text output to write to the file
-   - `all`: an array of templates that are applied across all document blocks.
-          All fields can be specified as [mustache template](https://mustache.github.io/) strings. There is a single mustache variable named `items`, an array whose
-          items correspond to the tags in the original document block.
-
-  - `tags`: an array of strings; for the template to be applied these tags must
-    be present
-  - `output`: an array of objects with the following fields. All values
-    can be a [mustache template](https://mustache.github.io/), and
-    the value of any of the tags in the input doc section will be
-    inserted into this template.
+   - `all`: an array of templates that are applied across all document blocks. All fields can be specified as [mustache template](https://mustache.github.io/) strings. There is a single mustache variable named `items`, an array whose items correspond to the tags and the `__body__` in the original document block. This includes the same fields as
+     `foreach`:
+        - `tags`: an array of strings. This template will apply to any document block where all the specified tags are present.
         - `file`: the file to store output in
-        - `order`: the ordering of the doc in the file
-        - `body`: the content to write to the file
+        - `order`: the order of this template output relative to other document blocks
+        - `output`: the resulting text output to write to the file
 - `comment`: defines how comments are found in a given type of file
-  - `extension`: a [glob](https://github.com/olson-sean-k/wax/blob/master/README.md#patterns) expression describing what files this comment type describe, which will be prefixed with `(?i)`, making it case insensitive.
-  - `start`: the starting regular expression for a multi-line comment
-  - `each_line`: The prefix that must be present (for single-line comments) and that can be present for multi-line comments. The first capture group must contain the contents of the comment
-  - `end`: The the ending regular expression for a multi-line-comment
+   - `extension`: a [glob](https://github.com/olson-sean-k/wax/blob/master/README.md#patterns) expression describing what files this comment type describe, which will be prefixed with `(?i)`, making it case insensitive.
+   - `start`: the starting regular expression for a multi-line comment
+   - `each_line`: The prefix that must be present (for single-line comments) and that can be present for multi-line comments. The first capture group must contain the contents of the comment
+   - `end`: The the ending regular expression for a multi-line-comment
 
 
 Example config file
 
 ```toml
 [header]
-version = "0.2.0"
+version = "0.2.1"
 
 [[comment]]
 extension = "*.md"

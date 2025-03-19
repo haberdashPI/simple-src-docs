@@ -317,7 +317,7 @@ impl SrcDocConfig {
     fn new() -> SrcDocConfig {
         return SrcDocConfig {
             header: ConfigHeader {
-                version: Version::parse("0.2").unwrap(),
+                version: Version::parse("0.2.1").unwrap(),
             },
             template: None,
             comment: Some(DEFAULT_COMMENT_MAP.clone()),
@@ -351,6 +351,7 @@ impl SrcDocConfig {
 }
 
 fn valid_version(v: &Version) -> Result<(), ValidationError> {
+    // we're on version 0.2.1: any files semver compatible with 0.2 are fine
     if VersionReq::parse("0.2").unwrap().matches(v) {
         return Ok(());
     } else {
