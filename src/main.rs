@@ -21,15 +21,17 @@ use wax::{Glob, Pattern};
 
 /// Extracts doc strings into markdown files
 ///
-/// Walks through all files in `<SOURCE>` and searches for comments. With comments, Looks
+/// Walks through all files in `<SOURCE>` and searches for comments. With comments, looks
 /// for `@file [file]` on its own line and if present the contents of the comment are
 /// appended to the specified file path. The file and its directories are created at the
 /// given `<DEST>`. Optionally, you can provide `@order [num]` on its own line to influence
 /// the ordering of the comment content. Content is sorted from the lowest to the highest
 /// `order`, breaking ties by pre-sorted ordering. Additional `@` prefixed tags will be
-/// excluded from the output. They don't do anything unless you define an appropriate
-/// configuration template (See README.md for details). You can configure what
-/// is considered a target for a given file extension in your config file.
+/// excluded from the output. All text on preceding lines is included as part of the tag
+/// until an empty line or a new tag is encountered. The additional tags don't do anything
+/// unless you define an appropriate configuration template (See README.md for details). You
+/// can configure what is considered a comment for a given file extension in your config
+/// file.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about)]
 struct Args {
@@ -115,6 +117,12 @@ fn read_comments(
     if let Some(c) = comment_config {
         let comments = Comments::new(str_lines, c);
         for d in DocIterator::new(comments) {
+            if args.verbose {
+                println!("Found comment with tags:");
+                for (k, v) in &d.tags {
+                    println!("@{}: {}", k, v);
+                }
+            }
             docs.push(d);
         }
         return Ok(());
@@ -170,6 +178,13 @@ fn run() -> Result<(), SrcDocError> {
             println!(" - {}", file);
         }
         let path = destination.join(file);
+        if !path.starts_with(destination) {
+            return Err(SrcDocError::new(format!(
+                "File path `{}` is not a child of the destination path `{}`.",
+                path.display(),
+                destination.display()
+            )));
+        }
         let dir = path.parent().unwrap();
 
         fs::create_dir_all(dir)?;
@@ -643,6 +658,7 @@ impl<'a, T: Iterator<Item = String>> Iterator for DocIterator<'a, T> {
         let mut tags = HashMap::new();
         let mut available_data = false;
         let mut order = 0.0;
+        let mut last_tag: Option<String> = None;
 
         for comment in &mut self.comments {
             if comment.last {
@@ -655,12 +671,26 @@ impl<'a, T: Iterator<Item = String>> Iterator for DocIterator<'a, T> {
                     std::process::exit(1);
                 } else if &m["tag"] == "order" {
                     order = parse_order(&m["value"]);
+                } else {
+                    last_tag = Some(String::from(&m["tag"]));
                 }
                 tags.insert(String::from(&m["tag"]), String::from(m["value"].trim()));
+
             } else {
-                available_data = true;
-                body.push_str(&comment.value);
-                body.push('\n');
+                if comment.value.trim().is_empty() {
+                    available_data = true;
+                    last_tag = None;
+                    body.push('\n');
+                } else if let Some(tag) = &last_tag {
+                    tags.entry(tag.clone()).and_modify(|value| {
+                        value.push(' ');
+                        value.push_str(&comment.value);
+                    });
+                } else {
+                    available_data = true;
+                    body.push_str(&comment.value);
+                    body.push('\n');
+                }
             }
         }
 
